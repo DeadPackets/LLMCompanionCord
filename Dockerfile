@@ -23,6 +23,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Copy source code
 COPY src/ ./src/
 COPY main.py ./
+COPY README.md ./
 
 # Install the project
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -30,11 +31,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # Create logs directory
 RUN mkdir -p /app/logs
-
-# Create non-root user for security
-RUN adduser -D -u 1000 botuser && \
-    chown -R botuser:botuser /app
-USER botuser
 
 # Run the bot
 CMD ["uv", "run", "python", "-m", "llmcompanioncord"]
