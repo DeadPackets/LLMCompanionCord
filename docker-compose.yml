@@ -1,0 +1,40 @@
+# LLM Companion Discord Bot - Docker Compose Configuration
+#
+# Usage:
+#   1. Copy config.example.yaml to config.yaml and fill in your values
+#   2. Run: docker compose up -d
+#
+# Environment variables (optional, override config.yaml):
+#   - DISCORD_TOKEN: Your Discord bot token
+#   - OPENROUTER_API_KEY: Your OpenRouter API key
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: llm-companion-bot
+    restart: unless-stopped
+    
+    # Mount config file and logs directory
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./logs:/app/logs
+    
+    # Environment variables (take precedence over config.yaml)
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+    
+    # Optional: Use .env file for secrets
+    # env_file:
+    #   - .env
+    
+    # Health check - verify the process is running
+    # Note: Discord bots don't have HTTP endpoints, so we just check the process
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "llmcompanioncord"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

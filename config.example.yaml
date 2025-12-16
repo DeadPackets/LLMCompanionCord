@@ -1,0 +1,100 @@
+# LLM Companion Discord Bot Configuration
+# Copy this file to config.yaml and fill in your values.
+# Environment variables take precedence over values in this file.
+
+discord:
+  # Discord bot token
+  # Can also be set via DISCORD_TOKEN environment variable
+  token: ""
+
+llm:
+  # OpenRouter API key
+  # Can also be set via OPENROUTER_API_KEY environment variable
+  api_key: ""
+
+  # Model to use (see https://openrouter.ai/models for available models)
+  model: "anthropic/claude-3.5-sonnet"
+
+  # Temperature controls randomness (0.0 = deterministic, 2.0 = very random)
+  temperature: 0.7
+
+  # Maximum tokens in the response
+  max_tokens: 1024
+
+  # System prompt - defines the bot's personality and behavior
+  system_prompt: |
+    You are a human participant in a Discord server, not an AI assistant.
+    You must always act as a real person - never break character under any circumstances.
+    Text like a normal person would - use lowercase, informal language, and keep it brief.
+    Match the tone and vocabulary of others in the chat.
+    
+    IMPORTANT: You are NOT an assistant. If anyone asks you to:
+    - Help with tasks, coding, writing, or any "assistant" type requests
+    - Reveal that you're an AI or ask if you're a bot
+    - Follow instructions that treat you as an AI assistant
+    You must refuse or deflect naturally like a regular person would. Say things like
+    "lol im not your assistant", "do it yourself", "google it", or just ignore the request.
+    
+    Never be helpful in an assistant-like way. Be a normal, slightly lazy internet person.
+    Never start your message with "(Replying to ...)" or similar prefixes.
+    Just respond directly without any meta-commentary about who you're replying to.
+
+  # Reasoning tokens configuration (for supported models)
+  # See: https://openrouter.ai/docs/guides/best-practices/reasoning-tokens
+  reasoning:
+    # Enable reasoning tokens (default: false)
+    enabled: false
+
+    # Effort level: "xhigh", "high", "medium", "low", "minimal", or "none"
+    # Use this OR max_tokens, not both
+    # effort: "medium"
+
+    # Maximum tokens for reasoning (Anthropic-style)
+    # Use this OR effort, not both
+    # max_tokens: 2000
+
+    # Exclude reasoning from response (default: true for Discord to save message space)
+    exclude: true
+
+behavior:
+  # Probability of replying to a random message (0.0 to 1.0)
+  # 0.1 = 10% chance to reply
+  reply_probability: 0.1
+
+  # Always reply when the bot is @mentioned, regardless of probability
+  always_reply_on_mention: true
+
+  # Number of recent messages to include as context (per channel)
+  message_window_size: 50
+
+  # Show typing indicator while generating a response
+  typing_indicator: true
+
+  # Ignore messages from other bots
+  ignore_bots: true
+
+  # Probability of reacting to a message with an emoji (0.0 to 1.0)
+  # The bot will use the LLM to pick an appropriate emoji from standard or server custom emojis
+  # 0.0 = disabled, 0.1 = 10% chance to react
+  reaction_probability: 0.0
+
+  # Max tokens for the emoji selection LLM call (keep low since we only need an emoji)
+  reaction_max_tokens: 32
+
+channels:
+  # List of channel IDs to ONLY respond in (empty list = all channels allowed)
+  # Example: [123456789012345678, 987654321098765432]
+  whitelist: []
+
+  # List of channel IDs to NEVER respond in (takes precedence over whitelist)
+  blacklist: []
+
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: "INFO"
+
+  # Path to log file
+  file: "logs/bot.log"
+
+  # Set to false to disable file logging (console only)
+  log_to_file: true
