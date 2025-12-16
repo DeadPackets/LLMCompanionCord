@@ -29,8 +29,9 @@ COPY README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen
 
-# Create logs directory
-RUN mkdir -p /app/logs
+# Create logs directory and empty config placeholder
+# The config placeholder ensures Docker mounts it as a file, not a directory
+RUN mkdir -p /app/logs && touch /app/config.yaml
 
 # Run the bot
 CMD ["uv", "run", "python", "-m", "llmcompanioncord"]
