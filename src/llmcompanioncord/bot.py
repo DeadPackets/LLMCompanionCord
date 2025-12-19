@@ -17,6 +17,9 @@ from llmcompanioncord.message_buffer import MessageBuffer
 
 logger = get_logger(__name__)
 
+# Supported image MIME types for multimodal LLM requests
+SUPPORTED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+
 # Common standard Unicode emojis for reactions
 STANDARD_EMOJIS = [
     "😀",
@@ -269,7 +272,7 @@ class LLMCompanionBot(discord.Client):
             await self._backfill_channel_history(message.channel)
 
         # Build message metadata
-        attachment_info = self._get_attachment_info(message)
+        attachment_info, image_urls = self._get_attachment_details(message)
         reply_to = await self._get_reply_context(message)
 
         # Add message to buffer
@@ -280,6 +283,7 @@ class LLMCompanionBot(discord.Client):
             is_bot_author=False,
             attachment_info=attachment_info,
             reply_to=reply_to,
+            image_urls=image_urls,
         )
 
         channel_name = getattr(message.channel, "name", "DM")
@@ -317,6 +321,7 @@ class LLMCompanionBot(discord.Client):
                         author=self.user.display_name,
                         content=response,
                         is_bot_author=True,
+                        image_urls=[],
                     )
                 logger.debug(
                     f"Sent response ({len(response)} chars): {response[:50]}..."
@@ -378,34 +383,63 @@ class LLMCompanionBot(discord.Client):
 
         return should_reply
 
-    def _get_attachment_info(self, message: Message) -> Optional[str]:
-        """Get human-readable attachment information.
+    def _get_attachment_details(
+        self, message: Message
+    ) -> tuple[Optional[str], list[str]]:
+        """Get attachment information and image URLs for multimodal support.
 
         Args:
             message: The Discord message object.
 
         Returns:
-            Description string like "[2 image(s) attached]" or None.
+            Tuple of (attachment_info_text, image_urls).
+            - attachment_info_text: Human-readable like "[2 image(s), 1 file(s) attached]"
+            - image_urls: List of Discord CDN URLs for valid images (filtered by type/size)
         """
         if not message.attachments:
-            return None
+            return None, []
 
-        count = len(message.attachments)
-        types: set[str] = set()
+        max_size_bytes = self.config.behavior.max_image_size_mb * 1024 * 1024
+
+        image_urls: list[str] = []
+        type_counts: dict[str, int] = {}
 
         for attachment in message.attachments:
             content_type = attachment.content_type or ""
-            if content_type.startswith("image/"):
-                types.add("image")
-            elif content_type.startswith("video/"):
-                types.add("video")
-            elif content_type.startswith("audio/"):
-                types.add("audio")
-            else:
-                types.add("file")
 
-        type_str = "/".join(sorted(types))
-        return f"[{count} {type_str}(s) attached]"
+            # Check if it's a supported image type
+            if content_type in SUPPORTED_IMAGE_TYPES:
+                type_counts["image"] = type_counts.get("image", 0) + 1
+                # Only include if within size limit
+                if attachment.size <= max_size_bytes:
+                    image_urls.append(attachment.url)
+                else:
+                    logger.debug(
+                        f"Skipping image {attachment.filename} "
+                        f"({attachment.size / 1024 / 1024:.1f}MB > "
+                        f"{self.config.behavior.max_image_size_mb}MB limit)"
+                    )
+            elif content_type.startswith("image/"):
+                # Unsupported image type (e.g., TIFF, BMP)
+                type_counts["image"] = type_counts.get("image", 0) + 1
+            elif content_type.startswith("video/"):
+                type_counts["video"] = type_counts.get("video", 0) + 1
+            elif content_type.startswith("audio/"):
+                type_counts["audio"] = type_counts.get("audio", 0) + 1
+            else:
+                type_counts["file"] = type_counts.get("file", 0) + 1
+
+        # Build attachment info string
+        if type_counts:
+            parts = []
+            for type_name in sorted(type_counts.keys()):
+                count = type_counts[type_name]
+                parts.append(f"{count} {type_name}(s)")
+            attachment_info = f"[{', '.join(parts)} attached]"
+        else:
+            attachment_info = None
+
+        return attachment_info, image_urls
 
     async def _get_reply_context(self, message: Message) -> Optional[str]:
         """Get the display name of the user being replied to.
@@ -466,8 +500,8 @@ class LLMCompanionBot(discord.Client):
                 # Determine if this is our bot's message
                 is_bot_author = msg.author == self.user
 
-                # Get attachment info
-                attachment_info = self._get_attachment_info(msg)
+                # Get attachment info and image URLs
+                attachment_info, image_urls = self._get_attachment_details(msg)
 
                 # Get reply context (synchronously check reference, skip fetch for backfill)
                 reply_to = None
@@ -483,6 +517,7 @@ class LLMCompanionBot(discord.Client):
                     is_bot_author=is_bot_author,
                     attachment_info=attachment_info,
                     reply_to=reply_to,
+                    image_urls=image_urls,
                 )
                 backfilled_count += 1
 
@@ -522,11 +557,25 @@ class LLMCompanionBot(discord.Client):
         channel_id = message.channel.id
         bot_name = self.user.display_name if self.user else "Assistant"
 
-        # Get messages formatted for LLM
+        # Get emoji history for penalty (if enabled)
+        avoid_emojis: list[tuple[str, int]] | None = None
+        if self.config.behavior.emoji_penalty_enabled:
+            avoid_emojis = self.message_buffer.get_recent_bot_emojis(
+                channel_id=channel_id,
+                message_count=self.config.behavior.emoji_history_size,
+            )
+            if avoid_emojis:
+                logger.debug(
+                    f"Emoji penalty: avoiding {len(avoid_emojis)} recently used emojis"
+                )
+
+        # Get messages formatted for LLM (with images and emoji penalty)
         messages = self.message_buffer.get_messages_for_llm(
             channel_id=channel_id,
             system_prompt=self.config.llm.system_prompt,
             bot_name=bot_name,
+            max_images=self.config.behavior.max_images,
+            avoid_emojis=avoid_emojis,
         )
 
         context_message_count = len(messages) - 1  # Subtract system prompt
@@ -536,13 +585,15 @@ class LLMCompanionBot(discord.Client):
         )
 
         # Define truncation callback for context length recovery
-        def truncate_callback() -> list[dict[str, str]]:
+        def truncate_callback() -> list[dict]:
             removed = self.message_buffer.truncate_oldest(channel_id, count=5)
             logger.debug(f"Truncated {removed} oldest messages from buffer")
             new_messages = self.message_buffer.get_messages_for_llm(
                 channel_id=channel_id,
                 system_prompt=self.config.llm.system_prompt,
                 bot_name=bot_name,
+                max_images=self.config.behavior.max_images,
+                avoid_emojis=avoid_emojis,
             )
             logger.debug(
                 f"After truncation: {len(new_messages) - 1} messages in context"

@@ -23,9 +23,9 @@ class ReasoningConfig(BaseModel):
     See: https://openrouter.ai/docs/guides/best-practices/reasoning-tokens
     """
 
-    enabled: bool = False
+    enabled: bool = True
     effort: str | None = Field(
-        default=None,
+        default="minimal",
         description="Effort level: 'xhigh', 'high', 'medium', 'low', 'minimal', or 'none'",
     )
     max_tokens: int | None = Field(
@@ -94,6 +94,27 @@ class BehaviorConfig(BaseModel):
         default=32,
         gt=0,
         description="Max tokens for emoji selection LLM call",
+    )
+    # Image support for multimodal models
+    max_images: int = Field(
+        default=5,
+        gt=0,
+        description="Maximum number of images to include in LLM context from recent messages",
+    )
+    max_image_size_mb: float = Field(
+        default=10.0,
+        gt=0,
+        description="Maximum image file size in MB to include (larger images are skipped)",
+    )
+    # Emoji repetition penalty
+    emoji_history_size: int = Field(
+        default=50,
+        gt=0,
+        description="Number of recent bot messages to scan for emoji frequency",
+    )
+    emoji_penalty_enabled: bool = Field(
+        default=True,
+        description="Add natural language hint to discourage repeated emoji use in replies",
     )
 
 

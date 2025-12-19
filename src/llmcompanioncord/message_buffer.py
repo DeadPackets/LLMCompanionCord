@@ -4,14 +4,32 @@ Maintains a sliding window of recent messages per Discord channel,
 with support for formatting messages for LLM API calls.
 """
 
-from collections import deque
-from dataclasses import dataclass
+import re
+from collections import Counter, deque
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from llmcompanioncord.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Regex pattern for Unicode emojis (comprehensive)
+EMOJI_PATTERN = re.compile(
+    "["
+    "\U0001f600-\U0001f64f"  # Emoticons
+    "\U0001f300-\U0001f5ff"  # Misc symbols & pictographs
+    "\U0001f680-\U0001f6ff"  # Transport & map symbols
+    "\U0001f1e0-\U0001f1ff"  # Flags
+    "\U00002702-\U000027b0"  # Dingbats
+    "\U0001f900-\U0001f9ff"  # Supplemental symbols
+    "\U0001fa00-\U0001fa6f"  # Chess, etc.
+    "\U0001fa70-\U0001faff"  # Symbols extended
+    "\U00002600-\U000026ff"  # Misc symbols
+    "\U00002300-\U000023ff"  # Misc technical
+    "]+",
+    flags=re.UNICODE,
+)
 
 
 @dataclass
@@ -24,6 +42,7 @@ class BufferedMessage:
     timestamp: datetime
     attachment_info: Optional[str] = None  # e.g., "[2 images attached]"
     reply_to: Optional[str] = None  # e.g., "Username" (who they're replying to)
+    image_urls: list[str] = field(default_factory=list)  # Discord CDN URLs for images
 
 
 class MessageBuffer:
@@ -56,6 +75,7 @@ class MessageBuffer:
         is_bot_author: bool = False,
         attachment_info: Optional[str] = None,
         reply_to: Optional[str] = None,
+        image_urls: Optional[list[str]] = None,
     ) -> None:
         """Add a message to the channel's buffer.
 
@@ -66,6 +86,7 @@ class MessageBuffer:
             is_bot_author: True if this message is from our bot.
             attachment_info: Human-readable attachment description.
             reply_to: Display name of the user being replied to.
+            image_urls: List of Discord CDN URLs for images in this message.
         """
         buffer = self._get_buffer(channel_id)
         was_full = len(buffer) == self._max_size
@@ -78,6 +99,7 @@ class MessageBuffer:
                 timestamp=datetime.now(),
                 attachment_info=attachment_info,
                 reply_to=reply_to,
+                image_urls=image_urls or [],
             )
         )
 
@@ -96,17 +118,21 @@ class MessageBuffer:
         channel_id: int,
         system_prompt: str,
         bot_name: str,
-    ) -> list[dict[str, str]]:
-        """Format messages for the LLM API.
+        max_images: int = 0,
+        avoid_emojis: Optional[list[tuple[str, int]]] = None,
+    ) -> list[dict[str, Any]]:
+        """Format messages for the LLM API with multimodal support.
 
         Args:
             channel_id: Discord channel ID.
             system_prompt: The system prompt for the LLM.
             bot_name: The bot's display name in the server.
+            max_images: Maximum number of images to include (0 = text only).
+            avoid_emojis: List of (emoji, frequency) tuples to discourage.
 
         Returns:
-            List of message dicts with 'role' and 'content' keys,
-            formatted for OpenRouter/OpenAI API.
+            List of message dicts formatted for OpenRouter/OpenAI API.
+            Messages may contain multimodal content arrays when images are present.
         """
         buffer = self._get_buffer(channel_id)
 
@@ -115,12 +141,39 @@ class MessageBuffer:
             f"{system_prompt}\n\nYour name in this server is {bot_name}."
         )
 
-        messages: list[dict[str, str]] = [
+        # Add emoji penalty hint if provided
+        if avoid_emojis:
+            emoji_list = ", ".join(
+                f"{emoji} ({count}x)" for emoji, count in avoid_emojis[:10]
+            )
+            full_system_prompt += (
+                f"\n\nYou've been using these emojis frequently in recent messages: "
+                f"{emoji_list}. "
+                "Try to vary your emoji usage - pick different ones or skip emojis "
+                "sometimes to keep things fresh."
+            )
+
+        messages: list[dict[str, Any]] = [
             {"role": "system", "content": full_system_prompt}
         ]
 
-        for msg in buffer:
-            # Build content with reply context and attachments
+        # First pass: collect image URLs from messages (newest first) up to max_images
+        images_to_include: dict[int, list[str]] = {}  # msg_index -> URLs to include
+        if max_images > 0:
+            images_remaining = max_images
+            buffer_list = list(buffer)
+            for idx in range(len(buffer_list) - 1, -1, -1):
+                msg = buffer_list[idx]
+                if msg.image_urls and images_remaining > 0:
+                    # Take up to images_remaining from this message
+                    urls_to_take = msg.image_urls[:images_remaining]
+                    images_to_include[idx] = urls_to_take
+                    images_remaining -= len(urls_to_take)
+                if images_remaining <= 0:
+                    break
+
+        # Second pass: build message list
+        for idx, msg in enumerate(buffer):
             content_parts: list[str] = []
 
             if msg.reply_to:
@@ -133,16 +186,74 @@ class MessageBuffer:
             else:
                 content_parts.append(f"[{msg.author}]: {msg.content}")
 
-            if msg.attachment_info:
+            # Check if this message has images to include
+            included_urls = images_to_include.get(idx, [])
+            excluded_image_count = (
+                len(msg.image_urls) - len(included_urls) if msg.image_urls else 0
+            )
+
+            # Add attachment info for non-included attachments
+            if excluded_image_count > 0:
+                content_parts.append(f"[{excluded_image_count} additional image(s)]")
+            elif msg.attachment_info and not msg.image_urls:
+                # Non-image attachments (video, audio, files)
                 content_parts.append(msg.attachment_info)
 
-            content = " ".join(content_parts)
-
-            # Bot messages are 'assistant', all others are 'user'
+            text_content = " ".join(content_parts)
             role = "assistant" if msg.is_bot_author else "user"
-            messages.append({"role": role, "content": content})
+
+            # Build message with or without images
+            if included_urls:
+                # Multimodal format: content is a list
+                content_array: list[dict[str, Any]] = [
+                    {"type": "text", "text": text_content}
+                ]
+                for url in included_urls:
+                    content_array.append(
+                        {"type": "image_url", "image_url": {"url": url}}
+                    )
+                messages.append({"role": role, "content": content_array})
+            else:
+                # Text-only format: content is a string
+                messages.append({"role": role, "content": text_content})
 
         return messages
+
+    def get_recent_bot_emojis(
+        self,
+        channel_id: int,
+        message_count: int,
+    ) -> list[tuple[str, int]]:
+        """Get emojis used in recent bot messages with frequency counts.
+
+        Args:
+            channel_id: Discord channel ID.
+            message_count: Number of recent bot messages to scan.
+
+        Returns:
+            List of (emoji, count) tuples sorted by frequency (most used first).
+        """
+        buffer = self._get_buffer(channel_id)
+
+        emoji_counter: Counter[str] = Counter()
+        bot_messages_scanned = 0
+
+        # Iterate from newest to oldest
+        for msg in reversed(buffer):
+            if msg.is_bot_author:
+                # Extract all emojis from the message content
+                emojis = EMOJI_PATTERN.findall(msg.content)
+                # Split combined emoji sequences into individual emojis
+                for emoji_seq in emojis:
+                    for emoji in emoji_seq:
+                        emoji_counter[emoji] += 1
+
+                bot_messages_scanned += 1
+                if bot_messages_scanned >= message_count:
+                    break
+
+        # Return sorted by frequency (most common first)
+        return emoji_counter.most_common()
 
     def truncate_oldest(self, channel_id: int, count: int = 5) -> int:
         """Remove the oldest N messages from a channel's buffer.

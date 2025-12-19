@@ -42,12 +42,12 @@ llm:
   # Reasoning tokens configuration (for supported models)
   # See: https://openrouter.ai/docs/guides/best-practices/reasoning-tokens
   reasoning:
-    # Enable reasoning tokens (default: false)
-    enabled: false
+    # Enable reasoning tokens (default: true)
+    enabled: true
 
     # Effort level: "xhigh", "high", "medium", "low", "minimal", or "none"
     # Use this OR max_tokens, not both
-    # effort: "medium"
+    effort: "minimal"
 
     # Maximum tokens for reasoning (Anthropic-style)
     # Use this OR effort, not both
@@ -80,6 +80,22 @@ behavior:
 
   # Max tokens for the emoji selection LLM call (keep low since we only need an emoji)
   reaction_max_tokens: 32
+
+  # Maximum number of images to include in LLM context (from recent messages)
+  # Images are collected from newest messages first until this limit is reached
+  # Supported formats: PNG, JPEG, WebP, GIF
+  max_images: 5
+
+  # Maximum image file size in MB to include (larger images are skipped)
+  max_image_size_mb: 10.0
+
+  # Number of recent bot messages to scan for emoji usage frequency
+  # Used to discourage repetitive emoji use in replies
+  emoji_history_size: 50
+
+  # Enable natural language hint in system prompt to vary emoji usage
+  # When enabled, the bot is encouraged to use different emojis instead of repeating favorites
+  emoji_penalty_enabled: true
 
 channels:
   # List of channel IDs to ONLY respond in (empty list = all channels allowed)
