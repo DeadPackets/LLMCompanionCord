@@ -395,10 +395,12 @@ class LLMCompanionBot(discord.Client):
             Tuple of (attachment_info_text, image_urls).
             - attachment_info_text: Human-readable like "[2 image(s), 1 file(s) attached]"
             - image_urls: List of Discord CDN URLs for valid images (filtered by type/size)
+              Will be empty if images_enabled is False.
         """
         if not message.attachments:
             return None, []
 
+        images_enabled = self.config.behavior.images_enabled
         max_size_bytes = self.config.behavior.max_image_size_mb * 1024 * 1024
 
         image_urls: list[str] = []
@@ -410,10 +412,10 @@ class LLMCompanionBot(discord.Client):
             # Check if it's a supported image type
             if content_type in SUPPORTED_IMAGE_TYPES:
                 type_counts["image"] = type_counts.get("image", 0) + 1
-                # Only include if within size limit
-                if attachment.size <= max_size_bytes:
+                # Only include if images are enabled and within size limit
+                if images_enabled and attachment.size <= max_size_bytes:
                     image_urls.append(attachment.url)
-                else:
+                elif images_enabled:
                     logger.debug(
                         f"Skipping image {attachment.filename} "
                         f"({attachment.size / 1024 / 1024:.1f}MB > "
@@ -569,12 +571,19 @@ class LLMCompanionBot(discord.Client):
                     f"Emoji penalty: avoiding {len(avoid_emojis)} recently used emojis"
                 )
 
+        # Determine max_images (0 if images disabled)
+        max_images = (
+            self.config.behavior.max_images
+            if self.config.behavior.images_enabled
+            else 0
+        )
+
         # Get messages formatted for LLM (with images and emoji penalty)
         messages = self.message_buffer.get_messages_for_llm(
             channel_id=channel_id,
             system_prompt=self.config.llm.system_prompt,
             bot_name=bot_name,
-            max_images=self.config.behavior.max_images,
+            max_images=max_images,
             avoid_emojis=avoid_emojis,
         )
 
@@ -592,7 +601,7 @@ class LLMCompanionBot(discord.Client):
                 channel_id=channel_id,
                 system_prompt=self.config.llm.system_prompt,
                 bot_name=bot_name,
-                max_images=self.config.behavior.max_images,
+                max_images=max_images,
                 avoid_emojis=avoid_emojis,
             )
             logger.debug(

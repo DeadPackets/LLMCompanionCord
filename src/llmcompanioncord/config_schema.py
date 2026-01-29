@@ -96,6 +96,10 @@ class BehaviorConfig(BaseModel):
         description="Max tokens for emoji selection LLM call",
     )
     # Image support for multimodal models
+    images_enabled: bool = Field(
+        default=True,
+        description="Enable image/media support for multimodal models. Disable if model doesn't support images.",
+    )
     max_images: int = Field(
         default=5,
         gt=0,
